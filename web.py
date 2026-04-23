@@ -1,10 +1,11 @@
 from flask import Flask, render_template, request
 from datetime import datetime
-
+import requests
 import os
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore
+from bs4 import BeautifulSoup
 
 # 判斷是在 Vercel 還是本地
 if os.path.exists('serviceAccountKey.json'):
@@ -15,8 +16,8 @@ else:
     firebase_config = os.getenv('FIREBASE_CONFIG')
     cred_dict = json.loads(firebase_config)
     cred = credentials.Certificate(cred_dict)
-
-firebase_admin.initialize_app(cred)
+if not firebase_admin._apps:
+    firebase_admin.initialize_app(cred)
 
 
 app = Flask(__name__)
@@ -33,7 +34,69 @@ def index():
     link += "<a href=/read2>讀取姓名</a><hr>"
     link += "<a href=/read1>讀取Firestore資料</a><hr>"
     link += "<a href=/spider>爬取子青老師本學習課程</a><hr>"
+    link += "<a href=/movie>爬取即將上映的電影</a><hr>"
     return link
+
+
+@app.route("/movie")
+def movie():
+    keyword = request.args.get("keyword", "")
+
+    R = f"""
+    <form action="/movie" method="get">
+        <label>請輸入電影關鍵字：</label>
+        <input type="text" name="keyword" value="{keyword}">
+        <button type="submit">搜尋</button>
+    </form>
+    <hr>
+    """
+    
+    if keyword:
+        R += f"您搜尋的關鍵字是：<b>{keyword}</b><br><br>"
+    
+    url = "https://www.atmovies.com.tw/movie/next/"
+    Data = requests.get(url)
+    Data.encoding = "utf-8"
+    sp = BeautifulSoup(Data.text, "html.parser")
+    result = sp.select(".filmListAllX li")
+    
+    found_count = 0
+    for item in result:
+        try:
+            # 取得標題
+            img_tag = item.find("img")
+            title = img_tag.get("alt") if img_tag else "無標題"
+            
+            # 判斷關鍵字
+            if not keyword or keyword in title:
+                introduce = "https://www.atmovies.com.tw" + item.find("a").get("href")
+                img_url = "https://www.atmovies.com.tw" + img_tag.get("src")
+                
+                R += f"<b>{title}</b><br>"
+                R += f'<a href="{introduce}" target="_blank">介紹頁超鏈結</a><br>'
+                R += f'<img src="{img_url}" width="200"><br><br>'
+                found_count += 1
+        except:
+            continue
+            
+    if keyword and found_count == 0:
+        R += f"找不到包含「{keyword}」的即將上映電影。"
+            
+    return R
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 @app.route("/spider")
 def spider():
