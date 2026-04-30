@@ -16,9 +16,9 @@ else:
     firebase_config = os.getenv('FIREBASE_CONFIG')
     cred_dict = json.loads(firebase_config)
     cred = credentials.Certificate(cred_dict)
+
 if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
-
 
 app = Flask(__name__)
 
@@ -34,9 +34,103 @@ def index():
     link += "<a href=/read2>讀取姓名</a><hr>"
     link += "<a href=/read1>讀取Firestore資料</a><hr>"
     link += "<a href=/spider>爬取子青老師本學習課程</a><hr>"
-    link += "<a href=/movie>爬取即將上映的電影</a><hr>"
+    link += "<a href=/movie>搜尋即將上映的電影(網頁爬蟲)</a><hr>"
+    link += "<a href=/spidermo>爬取即將上映的電影存入資料庫</a><hr>"
+    # 新增的 searchMovie 超連結
+    link += "<a href=/searchMovie>查詢資料庫符合的電影</a><hr>"
     return link
 
+# ==========================================
+# 這是你要求的 (2)searchMovie 功能
+# ==========================================
+@app.route("/searchMovie", methods=["GET", "POST"])
+def searchMovie():
+    # 建立符合圖片格式的表單 (外框、文字、按鈕)
+    Result = """
+    <div style="border: 1px solid #ccc; padding: 10px; display: inline-block; margin-bottom: 20px;">
+        <form action="/searchMovie" method="post" style="margin: 0;">
+            <label>請輸入欲查詢的片名：</label>
+            <input type="text" name="keyword" required>
+            <button type="submit">確定送出</button>
+        </form>
+    </div>
+    """
+
+    if request.method == "POST":
+        keyword = request.form.get("keyword")
+        Result += f"<h3>您查詢的關鍵字為：<span style='color:red;'>{keyword}</span></h3><hr>"
+        
+        # 連線至資料庫
+        db = firestore.client()
+        collection_ref = db.collection("電影2B")
+        docs = collection_ref.stream()
+        
+        found = False
+        for doc in docs:
+            movie_data = doc.to_dict()
+            title = movie_data.get("title", "")
+            
+            # 判斷關鍵字是否在片名中
+            if keyword in title:
+                found = True
+                movie_id = doc.id
+                picture = movie_data.get("picture", "")
+                hyperlink = movie_data.get("hyperlink", "")
+                showDate = movie_data.get("showDate", "")
+                
+                # 依序印出：編號,片名,海報,介紹頁及上映日期
+                Result += f"<b>編號：</b> {movie_id}<br>"
+                Result += f"<b>片名：</b> {title}<br>"
+                Result += f"<b>海報：</b><br><img src='{picture}' width='150'><br>"
+                Result += f"<b>介紹頁：</b> <a href='{hyperlink}' target='_blank'>點此查看介紹頁</a><br>"
+                Result += f"<b>上映日期：</b> {showDate}<br>"
+                Result += "<hr>"
+                
+        if not found:
+            Result += f"目前資料庫中找不到片名包含「{keyword}」的電影。<br>"
+
+    Result += "<br><a href='/'>返回首頁</a>"
+    return Result
+
+# ==========================================
+# 以下為原有的功能
+# ==========================================
+@app.route("/spidermo")
+def spitermo():
+    R = ""
+    db = firestore.client()
+
+    url = "http://www.atmovies.com.tw/movie/next/"
+    Data = requests.get(url)
+    Data.encoding = "utf-8"
+    sp = BeautifulSoup(Data.text, "html.parser")
+    lastUpdate = sp.find(class_="smaller09").text.replace("更新時間:","")
+    result = sp.select(".filmListAllX li")
+    
+    total = 0
+    for item in result:
+        total += 1
+        movie_id = item.find("a").get("href").replace("/movie/","").replace("/","")
+        title = item.find(class_="filmtitle").text
+        picture = "http://www.atmovies.com.tw" + item.find("img").get("src")
+        hyperlink = "http://www.atmovies.com.tw" + item.find("a").get("href")
+        showDate = item.find(class_="runtime").text[5:15]
+
+        doc = {
+            "title": title,
+            "picture": picture,
+            "hyperlink": hyperlink,
+            "showDate": showDate,
+            "lastUpdate": lastUpdate
+        }
+
+        doc_ref = db.collection("電影2B").document(movie_id)
+        doc_ref.set(doc)
+
+    R += "網站最近更新日期:" + lastUpdate + "<br>"
+    R += "總共爬取" + str(total) + "部電影到資料庫<br>"
+    R += "<br><a href='/'>返回首頁</a>"
+    return R
 
 @app.route("/movie")
 def movie():
@@ -54,7 +148,7 @@ def movie():
     if keyword:
         R += f"您搜尋的關鍵字是：<b>{keyword}</b><br><br>"
     
-    url = "https://www.atmovies.com.tw/movie/next/"
+    url = "https://www.atmovies.com.tw/movie/next"
     Data = requests.get(url)
     Data.encoding = "utf-8"
     sp = BeautifulSoup(Data.text, "html.parser")
@@ -63,11 +157,9 @@ def movie():
     found_count = 0
     for item in result:
         try:
-            # 取得標題
             img_tag = item.find("img")
             title = img_tag.get("alt") if img_tag else "無標題"
             
-            # 判斷關鍵字
             if not keyword or keyword in title:
                 introduce = "https://www.atmovies.com.tw" + item.find("a").get("href")
                 img_url = "https://www.atmovies.com.tw" + img_tag.get("src")
@@ -84,50 +176,30 @@ def movie():
             
     return R
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @app.route("/spider")
 def spider():
-    import requests # 放在這裡或檔案最上方都可以
-    from bs4 import BeautifulSoup
-    
     url = "https://www1.pu.edu.tw/~tcyang/course.html"
-    Data = requests.get(url) # 確保是小寫 requests
+    Data = requests.get(url) 
     Data.encoding = "utf-8"
     
     sp = BeautifulSoup(Data.text, "html.parser")
-    items = sp.select(".team-box a") # 換個變數名稱叫 items
+    items = sp.select(".team-box a") 
     
-    info = "" # 用來存結果的字串
+    info = "" 
     for i in items:
         info += i.text + "：" + i.get("href") + "<br>"
         
     return info
 
-
-
 @app.route("/read2", methods=["GET", "POST"])
 def read2():
-    # 網頁標題與查詢表單
     Result = "<h1>靜宜資管老師查詢</h1>"
     Result += '<form action="/read2" method="post">'
     Result += '請輸入老師姓名關鍵字：<input type="text" name="keyword">'
     Result += '<button type="submit">查詢</button></form><br>'
 
     if request.method == "POST":
-        keyword = request.form.get("keyword") # 取得使用者輸入的字，例如「楊」
+        keyword = request.form.get("keyword") 
         Result += f"<h3>查詢結果 (關鍵字: {keyword}):</h3>"
         
         db = firestore.client()
@@ -139,7 +211,6 @@ def read2():
             teacher_data = doc.to_dict()
             name = teacher_data.get('name')
             
-            # --- 關鍵修正：判斷關鍵字是否有在姓名裡面 ---
             if name and keyword in name: 
                 found = True
                 lab = teacher_data.get('lab', '未知')
@@ -150,16 +221,16 @@ def read2():
 
     Result += "<br><a href=/>返回首頁</a>"
     return Result
+
 @app.route("/read1")
 def read1():
     Result = ""
-    db = firestore.client() # 這裡原本拼錯，已修正
+    db = firestore.client()
     collection_ref = db.collection("資管2B 2026")
-    # 這裡保留你原本的排序邏輯，但修正了 stream 和 return 縮排
     docs = collection_ref.order_by("lab", direction=firestore.Query.DESCENDING).get()
     for doc in docs:
         Result += str(doc.to_dict()) + "<br>"
-    return Result # 縮排往左移，這樣才會顯示全部資料
+    return Result 
 
 @app.route("/mis")
 def course():
